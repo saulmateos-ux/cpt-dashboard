@@ -4,16 +4,15 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from data_code import data  # Import the actual data
 
-# Authentication credentials
-USERNAME = "saulmateos"
-PASSWORD = "Saulisawesome"
-
 # Authentication function
 def check_password():
     """Returns `True` if the user had the correct password."""
     def password_entered():
         """Checks whether a password entered by the user is correct."""
-        if st.session_state["username"].strip() == USERNAME and st.session_state["password"] == PASSWORD:
+        if (
+            st.session_state["username"].strip() == st.secrets.get("USERNAME", "admin") and 
+            st.session_state["password"] == st.secrets.get("PASSWORD", "admin")
+        ):
             st.session_state["password_correct"] = True
             del st.session_state["password"]  # Don't store password
             del st.session_state["username"]  # Don't store username
@@ -70,22 +69,18 @@ if check_password():
             description_col: "Description"
         })
 
-        # Drop rows with missing CPT codes or Partner names
-        processed_df = processed_df[processed_df["CPT_Code"].notnull() & processed_df["Partner"].notnull()]
+        # Only drop rows with missing Partner names (removed CPT Code filter)
+        processed_df = processed_df[processed_df["Partner"].notnull()]
         
-        # Filter for rows that have either Medicare or Medicaid data
-        processed_df = processed_df[
-            (processed_df["Medicare"] > 0) | (processed_df["Medicaid"] > 0)
-        ]
-
+        # Removed Medicare/Medicaid filter
+        
         # Calculate provider totals for the top 10 summary
         provider_totals = processed_df.groupby("Partner").agg({
             "Invoice": "sum",
             "Repaid": "sum"
         }).reset_index()
         
-        # Calculate repaid percentage
-        provider_totals["Repaid_Percentage"] = (provider_totals["Repaid"] / provider_totals["Invoice"] * 100).round(1)
+        # Removed repaid percentage calculation
         
         # Sort by Invoice amount and get top 10
         top_10_providers = provider_totals.nlargest(10, "Invoice")
@@ -93,29 +88,48 @@ if check_password():
         # Display top 10 providers summary
         st.subheader("Top 10 Georgia Providers by Total Invoice Amount")
         
-        # Format the data for display
+        # Create display dataframe without formatting
         top_10_providers_display = top_10_providers.copy()
-        top_10_providers_display["Invoice"] = top_10_providers_display["Invoice"].apply(lambda x: f"${x:,.2f}")
-        top_10_providers_display["Repaid"] = top_10_providers_display["Repaid"].apply(lambda x: f"${x:,.2f}")
-        top_10_providers_display["Repaid_Percentage"] = top_10_providers_display["Repaid_Percentage"].apply(lambda x: f"{x}%")
         
         # Rename columns for display
         top_10_providers_display = top_10_providers_display.rename(columns={
             "Partner": "Provider",
             "Invoice": "Total Invoice",
-            "Repaid": "Total Repaid",
-            "Repaid_Percentage": "Repaid %"
+            "Repaid": "Total Repaid"
         })
         
+        # Display the dataframe with Streamlit's native column configuration
         st.dataframe(
             top_10_providers_display,
+            column_config={
+                "Total Invoice": st.column_config.NumberColumn(
+                    "Total Invoice",
+                    format="$%.2f",
+                    help="Total invoice amount"
+                ),
+                "Total Repaid": st.column_config.NumberColumn(
+                    "Total Repaid",
+                    format="$%.2f",
+                    help="Total repaid amount"
+                )
+            },
             use_container_width=True
         )
         
         st.markdown("---")  # Add a divider
 
-        # Group by Partner + CPT code and calculate averages
-        agg_df = processed_df.groupby(["Partner", "CPT_Code"]).agg({
+        # --- Re-apply filters for the detailed analysis below ---
+        # Drop rows with missing CPT codes
+        processed_df_filtered = processed_df[processed_df["CPT_Code"].notnull()]
+
+        # Filter for rows that have either Medicare or Medicaid data
+        processed_df_filtered = processed_df_filtered[
+            (processed_df_filtered["Medicare"] > 0) | (processed_df_filtered["Medicaid"] > 0)
+        ]
+        # --- End of re-applied filters ---
+
+        # Group by Partner + CPT code and calculate averages using the FILTERED data
+        agg_df = processed_df_filtered.groupby(["Partner", "CPT_Code"]).agg({
             "Description": "first",
             "Invoice": "mean",
             "Repaid": "mean",
@@ -151,6 +165,28 @@ if check_password():
         st.subheader(f"Top {num_codes} CPT Metrics for {selected_partner} (by Invoice Amount)")
         st.dataframe(
             display_df[["CPT_Code", "Description", "Invoice", "Repaid", "Medicare", "Medicaid"]],
+            column_config={
+                "Invoice": st.column_config.NumberColumn(
+                    "Invoice",
+                    format="$%.2f",
+                    help="Invoice amount"
+                ),
+                "Repaid": st.column_config.NumberColumn(
+                    "Repaid",
+                    format="$%.2f",
+                    help="Amount repaid"
+                ),
+                "Medicare": st.column_config.NumberColumn(
+                    "Medicare",
+                    format="$%.2f",
+                    help="Medicare amount"
+                ),
+                "Medicaid": st.column_config.NumberColumn(
+                    "Medicaid",
+                    format="$%.2f",
+                    help="Medicaid amount"
+                )
+            },
             use_container_width=True
         )
 
@@ -244,7 +280,7 @@ if check_password():
         st.pyplot(fig)
 
         # Calculate true totals from the filtered processed_df for the selected partner
-        partner_data = processed_df[processed_df["Partner"] == selected_partner]
+        partner_data = processed_df_filtered[processed_df_filtered["Partner"] == selected_partner]
         partner_totals = partner_data.agg({
             "Invoice": "sum",
             "Repaid": "sum",
@@ -265,13 +301,28 @@ if check_password():
         st.subheader("Summary Statistics")
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Invoice Amount", f"${total_invoice:,.2f}")
+            st.metric(
+                "Total Invoice Amount",
+                "${:,.2f}".format(total_invoice)
+            )
         with col2:
-            st.metric("Total Repaid Amount", f"${total_repaid:,.2f}", f"{repaid_pct:.1f}% of Invoice")
+            st.metric(
+                "Total Repaid Amount",
+                "${:,.2f}".format(total_repaid),
+                "{:.1f}% of Invoice".format(repaid_pct)
+            )
         with col3:
-            st.metric("Total Medicare", f"${total_medicare:,.2f}", f"{medicare_pct:.1f}% of Invoice")
+            st.metric(
+                "Total Medicare",
+                "${:,.2f}".format(total_medicare),
+                "{:.1f}% of Invoice".format(medicare_pct)
+            )
         with col4:
-            st.metric("Total Medicaid", f"${total_medicaid:,.2f}", f"{medicaid_pct:.1f}% of Invoice")
+            st.metric(
+                "Total Medicaid",
+                "${:,.2f}".format(total_medicaid),
+                "{:.1f}% of Invoice".format(medicaid_pct)
+            )
 
         st.markdown("---")  # Add a divider
 
